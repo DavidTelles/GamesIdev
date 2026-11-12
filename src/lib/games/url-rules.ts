@@ -21,7 +21,7 @@ export function parseGameUrl(input: string, appOrigin: string): ParsedUrl {
   if (LOCAL_HOST.test(url.hostname) || !url.hostname.includes(".") && !url.hostname.includes(":")) {
     return { ok: false, error: "Internal or local addresses are not allowed." };
   }
-  if (url.origin === appOrigin) return { ok: false, error: "URLs on FrivSenai itself are not allowed." };
+  if (url.origin === appOrigin) return { ok: false, error: "URLs on GamesIdev itself are not allowed." };
   return { ok: true, url };
 }
 

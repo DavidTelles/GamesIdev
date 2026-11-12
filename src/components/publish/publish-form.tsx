@@ -140,7 +140,7 @@ export function PublishForm({ categories }: { categories: Category[] }) {
         </div>
         {blocked && (
           <p role="alert" className="mt-4 rounded-lg border-2 border-line bg-sun p-3 text-sm font-semibold">
-            This game cannot run inside FrivSenai. {blocked} Its page will only link to the original site.
+            This game cannot run inside GamesIdev. {blocked} Its page will only link to the original site.
           </p>
         )}
         {error && <p role="alert" className="mt-4 text-sm font-semibold text-brand-dark">{error}</p>}

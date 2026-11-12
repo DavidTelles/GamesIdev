@@ -7,7 +7,7 @@ const body = Inter({ subsets: ["latin"], variable: "--font-body" });
 const display = Bricolage_Grotesque({ subsets: ["latin"], variable: "--font-display-face" });
 
 export const metadata: Metadata = {
-  title: { default: "FrivSenai — Play and share browser games", template: "%s · FrivSenai" },
+  title: { default: "GamesIdev — Play and share browser games", template: "%s · GamesIdev" },
   description: "Discover community-made games, play instantly in your browser and publish your own.",
 };
 

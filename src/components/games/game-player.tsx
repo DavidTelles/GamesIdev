@@ -15,7 +15,7 @@ type Props = {
 };
 
 const LOAD_TIMEOUT_MS = 30_000;
-const VIEWER_KEY = "frivsenai-viewer";
+const VIEWER_KEY = "gamesidev-viewer";
 
 function recordView(gameId: string) {
   let key = localStorage.getItem(VIEWER_KEY);
@@ -56,7 +56,7 @@ export function GamePlayer({ gameId, title, sourceType, entryPath, externalUrl, 
   if (embedStatus === "blocked" && externalUrl) {
     return (
       <div className="tile p-8 text-center">
-        <h2 className="font-display text-xl font-bold">This game cannot run inside FrivSenai</h2>
+        <h2 className="font-display text-xl font-bold">This game cannot run inside GamesIdev</h2>
         <p className="mt-2 text-muted">The site hosting it does not allow embedding.</p>
         <a className="btn btn-primary mt-4" href={externalUrl} target="_blank" rel="noopener noreferrer nofollow">
           Open on the original site

@@ -4,14 +4,14 @@ vi.mock("server-only", () => ({}));
 const { checkGameUrl, isPublicAddress } = await import("@/lib/games/url-check");
 const { analyzeFramingHeaders, parseGameUrl } = await import("@/lib/games/url-rules");
 
-const APP = "https://frivsenai.test";
+const APP = "https://gamesidev.test";
 
 describe("parseGameUrl", () => {
   it.each(["http://example.com", "javascript:alert(1)", "file:///etc/passwd", "ftp://a.com", "data:text/html,x"])(
     "rejects protocol %s",
     (url) => expect(parseGameUrl(url, APP).ok).toBe(false),
   );
-  it.each(["https://u:p@example.com", "https://example.com:8443", "https://localhost", "https://intranet", "https://db.internal", "https://frivsenai.test/x", "not a url"])(
+  it.each(["https://u:p@example.com", "https://example.com:8443", "https://localhost", "https://intranet", "https://db.internal", "https://gamesidev.test/x", "not a url"])(
     "rejects %s",
     (url) => expect(parseGameUrl(url, APP).ok).toBe(false),
   );

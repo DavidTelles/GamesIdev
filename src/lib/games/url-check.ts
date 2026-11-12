@@ -77,7 +77,7 @@ function fetchHeaders(url: URL): Promise<{ status: number; headers: IncomingHttp
         method: "GET",
         lookup: safeLookup as never,
         timeout: TIMEOUT_MS,
-        headers: { "user-agent": "FrivSenai-EmbedCheck/1.0", accept: "text/html,*/*" },
+        headers: { "user-agent": "GamesIdev-EmbedCheck/1.0", accept: "text/html,*/*" },
       },
       (res) => {
         resolve({ status: res.statusCode ?? 0, headers: res.headers });

@@ -1,4 +1,4 @@
-# FrivSenai
+# GamesIdev
 
 Community game portal: play browser games without an account, publish your own through a ZIP file or an external URL.
 
