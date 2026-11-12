@@ -4,6 +4,7 @@ const NAV = [
   { href: "/games", label: "Categories" },
   { href: "/games?sort=popular", label: "Popular" },
   { href: "/games?sort=recent", label: "New" },
+  { href: "/top", label: "Top" },
 ];
 
 export function Header() {

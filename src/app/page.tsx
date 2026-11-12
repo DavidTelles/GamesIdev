@@ -30,8 +30,9 @@ export default async function HomePage() {
 
   const categories = await listCategories();
   const limit = SECTION_SIZE;
-  const [featured, popular, recent, byCategory] = await Promise.all([
+  const [featured, topRated, popular, recent, byCategory] = await Promise.all([
     listGames({ featured: true, limit }),
+    listGames({ sort: "rated", rankedOnly: true, limit }),
     listGames({ sort: "popular", limit }),
     listGames({ sort: "recent", limit }),
     Promise.all(categories.map((category) => listGames({ categoryId: category.id, sort: "popular", limit: 4 }))),
@@ -50,6 +51,7 @@ export default async function HomePage() {
         </section>
       )}
       <Section title="Featured Games" href="/games" games={featured} />
+      <Section title="Top Rated" href="/top" games={topRated} />
       <Section title="Most Popular" href="/games?sort=popular" games={popular} />
       <Section title="Recently Added" href="/games?sort=recent" games={recent} />
       {categories.map((category, index) => (

@@ -12,6 +12,8 @@ export const metadata: Metadata = { title: "Browse games" };
 const SORTS: { value: FeedSort; label: string }[] = [
   { value: "popular", label: "Most popular" },
   { value: "recent", label: "Newest" },
+  { value: "rated", label: "Top rated" },
+  { value: "played", label: "Most played" },
 ];
 
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;

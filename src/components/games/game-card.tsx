@@ -28,6 +28,11 @@ export function GameCard({ game }: { game: GameCardData }) {
         </p>
         <p className="mt-1 text-xs font-semibold">
           {compactNumber(game.view_count)} views
+          {game.rating_count > 0 && (
+            <span className="ml-1" aria-label={`Rated ${game.rating_avg.toFixed(1)} of 5`}>
+              · <span className="text-brand">★</span> {game.rating_avg.toFixed(1)}
+            </span>
+          )}
         </p>
       </div>
     </Link>

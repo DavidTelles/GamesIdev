@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { startTransition, useEffect, useRef, useState } from "react";
-import { countView } from "@/app/actions";
+import { countView, trackPlayStart } from "@/app/actions";
 import { EXTERNAL_GAME_SANDBOX, HOSTED_GAME_SANDBOX } from "@/lib/games/sandbox";
+import { getViewerKey } from "@/lib/viewer";
 
 type Props = {
   gameId: string;
@@ -15,15 +16,44 @@ type Props = {
 };
 
 const LOAD_TIMEOUT_MS = 30_000;
-const VIEWER_KEY = "gamesidev-viewer";
+const PLAY_FLUSH_MS = 30_000;
 
-function recordView(gameId: string) {
-  let key = localStorage.getItem(VIEWER_KEY);
-  if (!key) {
-    key = crypto.randomUUID();
-    localStorage.setItem(VIEWER_KEY, key);
+function sendPlayTime(gameId: string, seconds: number) {
+  if (seconds < 1) return;
+  const body = JSON.stringify({ seconds: Math.min(Math.round(seconds), 60) });
+  const url = `/api/games/${gameId}/play`;
+  if (!navigator.sendBeacon?.(url, new Blob([body], { type: "application/json" }))) {
+    void fetch(url, { method: "POST", body, headers: { "Content-Type": "application/json" }, keepalive: true }).catch(() => undefined);
   }
-  startTransition(() => countView(gameId, key));
+}
+
+function usePlayTimer(gameId: string, active: boolean) {
+  useEffect(() => {
+    if (!active) return;
+    let since = document.visibilityState === "visible" ? Date.now() : null;
+    const flush = () => {
+      if (since === null) return;
+      const now = Date.now();
+      sendPlayTime(gameId, (now - since) / 1000);
+      since = now;
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") since = Date.now();
+      else {
+        flush();
+        since = null;
+      }
+    };
+    const timer = setInterval(flush, PLAY_FLUSH_MS);
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pagehide", flush);
+    return () => {
+      flush();
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pagehide", flush);
+    };
+  }, [gameId, active]);
 }
 
 export function GamePlayer({ gameId, title, sourceType, entryPath, externalUrl, embedStatus }: Props) {
@@ -35,8 +65,11 @@ export function GamePlayer({ gameId, title, sourceType, entryPath, externalUrl, 
   const started = status !== "idle";
 
   useEffect(() => {
-    recordView(gameId);
+    const key = getViewerKey();
+    startTransition(() => countView(gameId, key));
   }, [gameId]);
+
+  usePlayTimer(gameId, started && status !== "error");
 
   useEffect(() => {
     if (status !== "loading") return;
@@ -45,6 +78,7 @@ export function GamePlayer({ gameId, title, sourceType, entryPath, externalUrl, 
   }, [status, run]);
 
   const start = async () => {
+    if (run === 0) startTransition(() => trackPlayStart(gameId));
     setStatus("loading");
     setRun((value) => value + 1);
     if (sourceType === "zip" && src) {

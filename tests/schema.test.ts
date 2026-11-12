@@ -35,6 +35,44 @@ describe("games", () => {
   });
 });
 
+describe("ratings", () => {
+  const A = "viewer-key-aaaaaaaaaa";
+  const B = "viewer-key-bbbbbbbbbb";
+  const stats = async () =>
+    (await query(`select rating_count, rating_sum, rating_avg::float8 avg from public.games where id='${GAME}'`)).rows[0];
+
+  it("averages one rating per viewer and recalculates when a viewer changes it", async () => {
+    await query(`insert into public.ratings (game_id, viewer_key, score) values ('${GAME}','${A}',5), ('${GAME}','${B}',2)`);
+    expect(await stats()).toEqual({ rating_count: 2, rating_sum: 7, avg: 3.5 });
+    await query(`insert into public.ratings (game_id, viewer_key, score) values ('${GAME}','${A}',3)
+      on conflict (game_id, viewer_key) do update set score = excluded.score`);
+    expect(await stats()).toEqual({ rating_count: 2, rating_sum: 5, avg: 2.5 });
+    await query(`delete from public.ratings where viewer_key='${B}'`);
+    expect(await stats()).toEqual({ rating_count: 1, rating_sum: 3, avg: 3 });
+  });
+  it("rejects out-of-range scores and malformed viewer keys", async () => {
+    await expect(query(`insert into public.ratings (game_id, viewer_key, score) values ('${GAME}','${B}',6)`)).rejects.toThrow(/check/);
+    await expect(query(`insert into public.ratings (game_id, viewer_key, score) values ('${GAME}','bad key',4)`)).rejects.toThrow(/ratings_viewer_key/);
+  });
+});
+
+describe("play time", () => {
+  it("caps each report at 60 seconds and ignores hidden games", async () => {
+    await query(`select public.record_play_time('${GAME}', 45)`);
+    await query(`select public.record_play_time('${GAME}', 5000)`);
+    await query(`select public.record_play_time('${GAME}', -10)`);
+    expect(await count(`select play_seconds n from public.games where id='${GAME}'`)).toBe(105);
+    await query(`select public.record_play_time('${HIDDEN}', 30)`);
+    expect(await count(`select play_seconds n from public.games where id='${HIDDEN}'`)).toBe(0);
+  });
+  it("counts play sessions for published games only", async () => {
+    await query(`select public.record_play_start('${GAME}')`);
+    await query(`select public.record_play_start('${HIDDEN}')`);
+    expect(await count(`select play_sessions n from public.games where id='${GAME}'`)).toBe(1);
+    expect(await count(`select play_sessions n from public.games where id='${HIDDEN}'`)).toBe(0);
+  });
+});
+
 describe("views", () => {
   it("counts a viewer once per day and ignores hidden games", async () => {
     const key = "viewer-key-0000000001";

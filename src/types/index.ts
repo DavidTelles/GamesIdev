@@ -7,6 +7,10 @@ export type GameCard = {
   cover_url: string;
   developer_name: string;
   view_count: number;
+  rating_avg: number;
+  rating_count: number;
+  play_seconds: number;
+  play_sessions: number;
   created_at: string;
   category: { slug: string; name: string } | null;
 };
@@ -22,4 +26,4 @@ export type GameDetail = GameCard & {
   embed_status: "embeddable" | "blocked";
 };
 
-export type FeedSort = "popular" | "recent";
+export type FeedSort = "popular" | "recent" | "rated" | "played" | "sessions";

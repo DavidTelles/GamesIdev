@@ -3,7 +3,8 @@ import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { GamePlayer } from "@/components/games/game-player";
-import { compactNumber, formatDate } from "@/lib/format";
+import { RatingStars } from "@/components/games/rating-stars";
+import { compactNumber, formatDate, formatDuration } from "@/lib/format";
 import { getGameBySlug } from "@/services/games";
 
 type Props = { params: Promise<{ slug: string }> };
@@ -41,7 +42,11 @@ export default async function GamePage({ params }: Props) {
             )}{" "}
             · by {game.developer_name} · {formatDate(game.created_at)}
           </p>
-          <p className="mt-1 text-sm font-semibold">{compactNumber(game.view_count)} views</p>
+          <p className="mt-1 text-sm font-semibold">
+            {compactNumber(game.view_count)} views · {compactNumber(game.play_sessions)} plays
+            {game.play_seconds >= 60 && <> · {formatDuration(game.play_seconds)} played</>}
+          </p>
+          <RatingStars gameId={game.id} average={game.rating_avg} count={game.rating_count} />
           <p className="mt-5 whitespace-pre-line">{game.description}</p>
         </div>
         <aside className="space-y-4">
