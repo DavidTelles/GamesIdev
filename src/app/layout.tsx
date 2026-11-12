@@ -17,7 +17,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       <body className="min-h-dvh antialiased">
         <Header />
         <main className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6">{children}</main>
-        <footer className="mx-auto max-w-7xl px-6 py-8 text-sm text-muted">FrivSenai — made by the community.</footer>
+        <footer className="mx-auto max-w-7xl px-6 py-8 text-sm text-muted">GamesIdev — made by the community.</footer>
       </body>
     </html>
   );
