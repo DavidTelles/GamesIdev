@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Bricolage_Grotesque, Inter } from "next/font/google";
+import { Analytics } from "@vercel/analytics/next";
 import { Header } from "@/components/layout/header";
 import "./globals.css";
 
@@ -18,6 +19,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <Header />
         <main className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6">{children}</main>
         <footer className="mx-auto max-w-7xl px-6 py-8 text-sm text-muted">GamesIdev — made by the community.</footer>
+        <Analytics />
       </body>
     </html>
   );
