@@ -61,7 +61,10 @@ export function GamePlayer({ gameId, title, sourceType, entryPath, externalUrl, 
   const [run, setRun] = useState(0);
   const [status, setStatus] = useState<"idle" | "loading" | "ready" | "slow" | "error">("idle");
 
-  const src = sourceType === "zip" ? `/play/${gameId}/${entryPath}` : externalUrl;
+  const src =
+    sourceType === "zip" && entryPath
+      ? `/play/${gameId}/${entryPath.split("/").map(encodeURIComponent).join("/")}`
+      : externalUrl;
   const started = status !== "idle";
 
   useEffect(() => {

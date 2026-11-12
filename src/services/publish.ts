@@ -2,7 +2,7 @@ import "server-only";
 import { createHash, randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { sql } from "@/lib/db";
-import { detectCoverImage } from "@/lib/games/file-rules";
+import { detectCoverImage, extensionOf } from "@/lib/games/file-rules";
 import { makeGameSlug } from "@/lib/games/slug";
 import { checkGameUrl } from "@/lib/games/url-check";
 import { extractGameZip, ZIP_LIMITS, ZipValidationError, type ExtractedFile } from "@/lib/games/zip";
@@ -53,23 +53,32 @@ async function downloadStaged(admin: SupabaseClient, path: string, maxBytes: num
   return new Uint8Array(await data.arrayBuffer());
 }
 
-async function uploadFiles(admin: SupabaseClient, gameId: string, files: ExtractedFile[]) {
+type StoredFile = ExtractedFile & { storageKey: string };
+
+function withStorageKeys(gameId: string, files: ExtractedFile[]): StoredFile[] {
+  return files.map((file, index) => {
+    const extension = extensionOf(file.path);
+    return { ...file, storageKey: `${gameId}/${index}${extension ? `.${extension}` : ""}` };
+  });
+}
+
+async function uploadFiles(admin: SupabaseClient, files: StoredFile[]) {
   let next = 0;
   const worker = async () => {
     while (next < files.length) {
       const file = files[next++];
       const { error } = await admin.storage
         .from("game-files")
-        .upload(`${gameId}/${file.path}`, file.data, { contentType: file.contentType, upsert: false });
+        .upload(file.storageKey, file.data, { contentType: file.contentType, upsert: false });
       if (error) throw new PublishError(`Could not store "${file.path}".`, 500);
     }
   };
   await Promise.all(Array.from({ length: UPLOAD_CONCURRENCY }, worker));
 }
 
-async function removeGameStorage(admin: SupabaseClient, gameId: string, paths: string[]) {
-  for (let index = 0; index < paths.length; index += 500) {
-    await admin.storage.from("game-files").remove(paths.slice(index, index + 500).map((path) => `${gameId}/${path}`));
+async function removeGameStorage(admin: SupabaseClient, gameId: string, storageKeys: string[]) {
+  for (let index = 0; index < storageKeys.length; index += 500) {
+    await admin.storage.from("game-files").remove(storageKeys.slice(index, index + 500));
   }
   const { data } = await admin.storage.from("game-covers").list(gameId);
   if (data?.length) await admin.storage.from("game-covers").remove(data.map(({ name }) => `${gameId}/${name}`));
@@ -86,13 +95,15 @@ export async function publishGame(admin: SupabaseClient, publisher: string, inpu
 
   const gameId = randomUUID();
   const source = { entry_path: null as string | null, external_url: null as string | null, embed_status: "embeddable" };
-  let extracted: ExtractedFile[] = [];
+  let extracted: StoredFile[] = [];
+  let skipped = 0;
 
   if (input.sourceType === "zip") {
     const archive = await downloadStaged(admin, paths.zip, ZIP_LIMITS.archiveBytes, "ZIP file");
     try {
       const game = extractGameZip(archive);
-      extracted = game.files;
+      extracted = withStorageKeys(gameId, game.files);
+      skipped = game.skipped;
       source.entry_path = game.entryPath;
     } catch (error) {
       if (error instanceof ZipValidationError) throw new PublishError(error.message);
@@ -106,13 +117,13 @@ export async function publishGame(admin: SupabaseClient, publisher: string, inpu
   }
 
   const coverStoragePath = `${gameId}/${randomUUID()}.${cover.extension}`;
-  const filePaths = extracted.map(({ path }) => path);
+  const storageKeys = extracted.map(({ storageKey }) => storageKey);
   try {
     const coverUpload = await admin.storage
       .from("game-covers")
       .upload(coverStoragePath, coverBytes, { contentType: cover.contentType });
     if (coverUpload.error) throw new PublishError("Could not store the cover image.", 500);
-    await uploadFiles(admin, gameId, extracted);
+    await uploadFiles(admin, extracted);
 
     const coverUrl = admin.storage.from("game-covers").getPublicUrl(coverStoragePath).data.publicUrl;
     const slug = makeGameSlug(input.title);
@@ -123,17 +134,18 @@ export async function publishGame(admin: SupabaseClient, publisher: string, inpu
           values (${gameId}, ${input.categoryId}, ${slug}, ${input.title}, ${input.description},
             ${input.developerName}, ${input.controls}, ${input.technologies}, ${coverUrl}, ${input.sourceType},
             ${source.entry_path}, ${source.external_url}, ${source.embed_status}, ${publisher})`,
-        sql`insert into public.game_files (game_id, path, content_type, size_bytes)
+        sql`insert into public.game_files (game_id, path, content_type, size_bytes, storage_key)
           select ${gameId}, * from unnest(${extracted.map((file) => file.path)}::text[],
-            ${extracted.map((file) => file.contentType)}::text[], ${extracted.map((file) => file.data.length)}::bigint[])`,
+            ${extracted.map((file) => file.contentType)}::text[], ${extracted.map((file) => file.data.length)}::bigint[],
+            ${storageKeys}::text[])`,
       ]);
     } catch {
       throw new PublishError("Could not save the game. Check the category and try again.");
     }
     await admin.storage.from("uploads").remove(staged);
-    return { slug, embedStatus: source.embed_status };
+    return { slug, embedStatus: source.embed_status, skipped };
   } catch (error) {
-    await removeGameStorage(admin, gameId, filePaths);
+    await removeGameStorage(admin, gameId, storageKeys);
     throw error;
   }
 }

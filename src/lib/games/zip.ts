@@ -1,21 +1,27 @@
 import { unzipSync } from "fflate";
-import { contentTypeFor, validateFileContent, validateGamePath } from "./file-rules";
+import { contentTypeFor, isAllowedContent, isGameAssetPath } from "./file-rules";
 
 export const ZIP_LIMITS = {
   archiveBytes: 100 * 1024 * 1024,
   totalBytes: 250 * 1024 * 1024,
   fileBytes: 50 * 1024 * 1024,
   files: 1000,
-  depth: 10,
+  depth: 12,
 } as const;
 
 export class ZipValidationError extends Error {}
 
 export type ExtractedFile = { path: string; contentType: string; data: Uint8Array };
-export type ExtractedGame = { entryPath: string; files: ExtractedFile[]; totalBytes: number };
+export type ExtractedGame = { entryPath: string; files: ExtractedFile[]; totalBytes: number; skipped: number };
 
-const IGNORED = /(^|\/)(__MACOSX\/|\.DS_Store$|Thumbs\.db$)/;
 const ZIP_MAGIC = [0x50, 0x4b, 0x03, 0x04];
+const SOURCE_MARKER = /^(package\.json|vite\.config\.[cm]?[jt]s|next\.config\.[cm]?[jt]s|tsconfig\.json)$/i;
+
+export const NO_ENTRY_MESSAGE =
+  "No playable index.html was found. If this is a source project (Next.js, Vite, React), upload the built folder (dist, build or out) or publish it with an external URL.";
+
+const dirOf = (path: string) => path.slice(0, path.lastIndexOf("/") + 1);
+const baseOf = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 
 export function extractGameZip(archive: Uint8Array): ExtractedGame {
   if (archive.length > ZIP_LIMITS.archiveBytes) {
@@ -25,69 +31,75 @@ export function extractGameZip(archive: Uint8Array): ExtractedGame {
     throw new ZipValidationError("The uploaded file is not a valid ZIP archive.");
   }
 
+  const allNames: string[] = [];
   let declaredTotal = 0;
-  let entryCount = 0;
-  const violation: { message?: string } = {};
-  const fail = (message: string) => {
-    violation.message ??= message;
-    return false;
-  };
+  let tooBig = false;
 
   let raw: Record<string, Uint8Array>;
   try {
     raw = unzipSync(archive, {
       filter: ({ name, originalSize }) => {
-        if (name.endsWith("/") || IGNORED.test(name)) return false;
-        entryCount += 1;
-        if (entryCount > ZIP_LIMITS.files) return fail(`The ZIP contains more than ${ZIP_LIMITS.files} files.`);
-        const pathError = validateGamePath(name, ZIP_LIMITS.depth);
-        if (pathError) return fail(`"${name}": ${pathError}`);
-        if (originalSize > ZIP_LIMITS.fileBytes) return fail(`"${name}" exceeds the 50 MB per-file limit.`);
+        if (name.endsWith("/")) return false;
+        allNames.push(name);
+        if (!isGameAssetPath(name, ZIP_LIMITS.depth) || originalSize > ZIP_LIMITS.fileBytes) return false;
         declaredTotal += originalSize;
-        if (declaredTotal > ZIP_LIMITS.totalBytes) return fail("The extracted game exceeds the 250 MB limit.");
-        return !violation.message;
+        if (declaredTotal > ZIP_LIMITS.totalBytes) tooBig = true;
+        return !tooBig;
       },
     });
   } catch {
     throw new ZipValidationError("The ZIP archive is corrupted or uses an unsupported format.");
   }
-  if (violation.message) throw new ZipValidationError(violation.message);
+  if (tooBig) throw new ZipValidationError("The game is larger than 250 MB once extracted.");
 
-  const names = Object.keys(raw);
+  const kept = new Map<string, Uint8Array>();
   const seen = new Set<string>();
-  for (const name of names) {
-    const key = name.toLowerCase();
-    if (seen.has(key)) throw new ZipValidationError(`"${name}" appears more than once in the ZIP.`);
+  for (const [name, data] of Object.entries(raw)) {
+    const path = name.normalize("NFC");
+    const key = path.toLowerCase();
+    if (seen.has(key) || !isAllowedContent(data)) continue;
     seen.add(key);
+    kept.set(path, data);
   }
 
-  const entryPath = findEntry(names);
-  const prefix = entryPath.slice(0, entryPath.length - "index.html".length);
+  const sourceDirs = new Set(allNames.filter((name) => SOURCE_MARKER.test(baseOf(name))).map(dirOf));
+  const entry = findEntry([...kept.keys()], sourceDirs);
+  const prefix = dirOf(entry);
 
   const files: ExtractedFile[] = [];
   let totalBytes = 0;
-  for (const name of names) {
-    if (!name.startsWith(prefix)) {
-      throw new ZipValidationError(`"${name}" is outside the folder that contains index.html.`);
-    }
-    const data = raw[name];
-    const contentError = validateFileContent(name, data);
-    if (contentError) throw new ZipValidationError(`"${name}": ${contentError}`);
+  for (const [path, data] of kept) {
+    if (!path.startsWith(prefix)) continue;
     totalBytes += data.length;
-    files.push({ path: name.slice(prefix.length), contentType: contentTypeFor(name), data });
+    files.push({ path: path.slice(prefix.length), contentType: contentTypeFor(path), data });
+  }
+  if (files.length > ZIP_LIMITS.files) {
+    throw new ZipValidationError(`The game has more than ${ZIP_LIMITS.files} files.`);
   }
 
-  return { entryPath: "index.html", files, totalBytes };
+  return { entryPath: entry.slice(prefix.length), files, totalBytes, skipped: allNames.length - files.length };
 }
 
-function findEntry(names: string[]): string {
-  const candidates = names.filter((name) => name.toLowerCase().split("/").pop() === "index.html" && name.endsWith("index.html"));
-  if (candidates.length === 0) throw new ZipValidationError("No index.html was found in the ZIP.");
-  const depthOf = (name: string) => name.split("/").length;
-  const shallowest = Math.min(...candidates.map(depthOf));
-  const top = candidates.filter((name) => depthOf(name) === shallowest);
-  if (top.length > 1) {
-    throw new ZipValidationError("More than one main index.html was found. Keep a single game per ZIP.");
+function findEntry(paths: string[], sourceDirs: Set<string>): string {
+  const depthOf = (path: string) => path.split("/").length;
+  const filesUnder = (dir: string) => paths.filter((path) => path.startsWith(dir)).length;
+  const pick = (candidates: string[]) => {
+    const shallowest = Math.min(...candidates.map(depthOf));
+    return candidates
+      .filter((path) => depthOf(path) === shallowest)
+      .sort((a, b) => filesUnder(dirOf(b)) - filesUnder(dirOf(a)))[0];
+  };
+
+  const indexes = paths.filter((path) => /^index\.html?$/i.test(baseOf(path)));
+  const built = indexes.filter((path) => !sourceDirs.has(dirOf(path)));
+  if (built.length) return pick(built);
+  if (indexes.length) return pick(indexes);
+
+  const pages = paths.filter((path) => /\.html?$/i.test(path));
+  if (pages.length) {
+    const shallowest = Math.min(...pages.map(depthOf));
+    const top = pages.filter((path) => depthOf(path) === shallowest);
+    if (top.length === 1) return top[0];
   }
-  return top[0];
+  throw new ZipValidationError(NO_ENTRY_MESSAGE);
 }

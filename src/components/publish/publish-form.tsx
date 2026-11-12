@@ -1,27 +1,58 @@
 "use client";
 
+import { zip as zipAsync, type Zippable } from "fflate";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import type { UrlCheckResult } from "@/lib/games/url-rules";
-import { detectCoverImage } from "@/lib/games/file-rules";
+import { detectCoverImage, isGameAssetPath } from "@/lib/games/file-rules";
 import { createClient } from "@/lib/supabase/client";
 import { gameMetadataSchema } from "@/lib/validation/game";
 import type { Category } from "@/types";
 
 const MAX_ZIP = 100 * 1024 * 1024;
 const MAX_COVER = 5 * 1024 * 1024;
+const MAX_FOLDER_DEPTH = 13;
 
-type SourceType = "zip" | "url";
+type ImportType = "folder" | "zip" | "url";
 type UploadTarget = { path: string; token: string };
 type UploadSlot = { uploadId: string; cover: UploadTarget; zip: UploadTarget | null };
+type GameFolder = { name: string; files: { path: string; file: File }[]; skipped: number; hasIndex: boolean };
+
+const IMPORT_LABELS: Record<ImportType, string> = {
+  folder: "Game folder (easiest)",
+  zip: "ZIP file",
+  url: "External URL",
+};
+
+function readFolder(list: FileList): GameFolder {
+  const all = Array.from(list).map((file) => ({ path: file.webkitRelativePath || file.name, file }));
+  const files = all.filter(({ path }) => isGameAssetPath(path, MAX_FOLDER_DEPTH));
+  return {
+    name: all[0]?.path.split("/")[0] ?? "folder",
+    files,
+    skipped: all.length - files.length,
+    hasIndex: files.some(({ path }) => /(^|\/)index\.html?$/i.test(path)),
+  };
+}
+
+async function zipFolder(folder: GameFolder): Promise<File> {
+  const entries: Zippable = {};
+  for (const { path, file } of folder.files) entries[path] = new Uint8Array(await file.arrayBuffer());
+  const bytes = await new Promise<Uint8Array>((resolve, reject) =>
+    zipAsync(entries, { level: 6 }, (failure, data) => (failure ? reject(failure) : resolve(data))),
+  );
+  return new File([bytes as BlobPart], `${folder.name}.zip`, { type: "application/zip" });
+}
 
 export function PublishForm({ categories }: { categories: Category[] }) {
   const router = useRouter();
   const [values, setValues] = useState({ title: "", description: "", categoryId: "", developerName: "", controls: "", technologies: "" });
-  const [sourceType, setSourceType] = useState<SourceType>("zip");
+  const [importType, setImportType] = useState<ImportType>("folder");
+  const sourceType = importType === "url" ? "url" : "zip";
   const [cover, setCover] = useState<File | null>(null);
   const [coverPreview, setCoverPreview] = useState<string | null>(null);
   const [zip, setZip] = useState<File | null>(null);
+  const [folder, setFolder] = useState<GameFolder | null>(null);
   const [url, setUrl] = useState("");
   const [urlCheck, setUrlCheck] = useState<UrlCheckResult | null>(null);
   const [step, setStep] = useState<"edit" | "preview">("edit");
@@ -67,7 +98,14 @@ export function PublishForm({ categories }: { categories: Category[] }) {
     if (!detectCoverImage(new Uint8Array(await cover.slice(0, 16).arrayBuffer()))) {
       return setError("The cover must be a real PNG, JPEG, WebP or GIF image.");
     }
-    if (sourceType === "zip") {
+    if (importType === "folder") {
+      if (!folder?.files.length) return setError("Choose the folder of your game.");
+      if (!folder.hasIndex) {
+        return setError(
+          "This folder has no index.html. For Vite, React or Next.js projects, choose the built folder (dist, build or out), or publish with an external URL.",
+        );
+      }
+    } else if (importType === "zip") {
       if (!zip) return setError("Choose a ZIP file.");
       if (zip.size > MAX_ZIP) return setError("The ZIP must be 100 MB or smaller.");
     } else {
@@ -79,16 +117,22 @@ export function PublishForm({ categories }: { categories: Category[] }) {
     setStep("preview");
   };
 
-  const stage = async (file: File, slot: UploadTarget) => {
+  const stage = async (file: File, slot: UploadTarget, contentType = file.type) => {
     const { error: failure } = await createClient()
       .storage.from("uploads")
-      .uploadToSignedUrl(slot.path, slot.token, file, { contentType: file.type });
+      .uploadToSignedUrl(slot.path, slot.token, new Blob([file], { type: contentType }), { contentType });
     if (failure) throw new Error(`Upload failed: ${failure.message}`);
   };
 
   const publish = async () => {
     setError(null);
     try {
+      let gameZip = zip;
+      if (importType === "folder") {
+        setProgress(`Packing ${folder!.files.length} files…`);
+        gameZip = await zipFolder(folder!);
+        if (gameZip.size > MAX_ZIP) throw new Error("The game folder is larger than 100 MB once compressed.");
+      }
       setProgress("Preparing upload…");
       const slotResponse = await fetch("/api/uploads", {
         method: "POST",
@@ -100,8 +144,8 @@ export function PublishForm({ categories }: { categories: Category[] }) {
       setProgress("Uploading cover…");
       await stage(cover!, slot.cover);
       if (sourceType === "zip") {
-        setProgress("Uploading ZIP…");
-        await stage(zip!, slot.zip!);
+        setProgress("Uploading game files…");
+        await stage(gameZip!, slot.zip!, "application/zip");
       }
       setProgress("Validating and publishing…");
       const response = await fetch("/api/games", {
@@ -135,7 +179,10 @@ export function PublishForm({ categories }: { categories: Category[] }) {
             <p className="whitespace-pre-line">{values.description}</p>
             <p><strong>Controls:</strong> {values.controls}</p>
             {values.technologies && <p><strong>Built with:</strong> {values.technologies}</p>}
-            <p className="break-all"><strong>Source:</strong> {sourceType === "zip" ? zip?.name : url}</p>
+            <p className="break-all">
+              <strong>Source:</strong>{" "}
+              {importType === "folder" ? `${folder?.name} (${folder?.files.length} files)` : importType === "zip" ? zip?.name : url}
+            </p>
           </dl>
         </div>
         {blocked && (
@@ -184,18 +231,43 @@ export function PublishForm({ categories }: { categories: Category[] }) {
       </label>
       <fieldset>
         <legend className="text-sm font-semibold">Import type</legend>
-        <div className="mt-1 flex gap-4 text-sm">
-          {(["zip", "url"] as const).map((type) => (
+        <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-sm">
+          {(Object.keys(IMPORT_LABELS) as ImportType[]).map((type) => (
             <label key={type} className="flex items-center gap-2">
-              <input type="radio" name="source" checked={sourceType === type} onChange={() => setSourceType(type)} />
-              {type === "zip" ? "ZIP file" : "External URL"}
+              <input type="radio" name="source" checked={importType === type} onChange={() => { setImportType(type); setError(null); }} />
+              {IMPORT_LABELS[type]}
             </label>
           ))}
         </div>
       </fieldset>
-      {sourceType === "zip" ? (
-        <label className="text-sm font-semibold">Game ZIP (must contain index.html, up to 100 MB)
-          <input className="field mt-1 font-normal" type="file" required accept=".zip,application/zip" onChange={(event) => setZip(event.target.files?.[0] ?? null)} />
+      {importType === "folder" ? (
+        <div className="text-sm font-semibold">
+          <label>Game folder (the one with index.html)
+            <input
+              className="field mt-1 font-normal"
+              type="file"
+              required
+              multiple
+              {...{ webkitdirectory: "", directory: "" }}
+              onChange={(event) => setFolder(event.target.files?.length ? readFolder(event.target.files) : null)}
+            />
+          </label>
+          <p className="mt-1 font-normal text-muted">
+            For Vite, React or Next.js projects, pick the built folder (dist, build or out). Files the game does not
+            need, like .git, node_modules or docs, are left out automatically.
+          </p>
+          {folder && (
+            <p role="status" className={`mt-1 ${folder.hasIndex ? "text-mint" : "text-brand-dark"}`}>
+              {folder.hasIndex
+                ? `${folder.files.length} files ready${folder.skipped ? `, ${folder.skipped} left out` : ""}.`
+                : "No index.html in this folder."}
+            </p>
+          )}
+        </div>
+      ) : importType === "zip" ? (
+        <label className="text-sm font-semibold">Game ZIP (with index.html inside, up to 100 MB)
+          <input className="field mt-1 font-normal" type="file" required accept=".zip,application/zip,application/x-zip-compressed" onChange={(event) => setZip(event.target.files?.[0] ?? null)} />
+          <span className="mt-1 block font-normal text-muted">Files the game does not need are left out automatically.</span>
         </label>
       ) : (
         <label className="text-sm font-semibold">Game URL (https only)

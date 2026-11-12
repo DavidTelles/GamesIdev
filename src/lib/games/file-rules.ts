@@ -10,7 +10,30 @@ const FILE_TYPES: Record<string, { type: string; kind: FileKind }> = {
   txt: { type: "text/plain; charset=utf-8", kind: "text" },
   xml: { type: "application/xml; charset=utf-8", kind: "text" },
   map: { type: "application/json; charset=utf-8", kind: "text" },
+  webmanifest: { type: "application/manifest+json; charset=utf-8", kind: "text" },
+  csv: { type: "text/csv; charset=utf-8", kind: "text" },
+  tsv: { type: "text/tab-separated-values; charset=utf-8", kind: "text" },
+  atlas: { type: "text/plain; charset=utf-8", kind: "text" },
+  fnt: { type: "text/plain; charset=utf-8", kind: "text" },
+  glsl: { type: "text/plain; charset=utf-8", kind: "text" },
+  vert: { type: "text/plain; charset=utf-8", kind: "text" },
+  frag: { type: "text/plain; charset=utf-8", kind: "text" },
+  tmx: { type: "application/xml; charset=utf-8", kind: "text" },
+  tmj: { type: "application/json; charset=utf-8", kind: "text" },
+  tsj: { type: "application/json; charset=utf-8", kind: "text" },
+  gltf: { type: "model/gltf+json", kind: "text" },
+  obj: { type: "text/plain; charset=utf-8", kind: "text" },
+  mtl: { type: "text/plain; charset=utf-8", kind: "text" },
   svg: { type: "image/svg+xml", kind: "text" },
+  avif: { type: "image/avif", kind: "image" },
+  bmp: { type: "image/bmp", kind: "image" },
+  ktx2: { type: "image/ktx2", kind: "image" },
+  hdr: { type: "application/octet-stream", kind: "image" },
+  flac: { type: "audio/flac", kind: "audio" },
+  aac: { type: "audio/aac", kind: "audio" },
+  opus: { type: "audio/ogg", kind: "audio" },
+  ogv: { type: "video/ogg", kind: "video" },
+  glb: { type: "model/gltf-binary", kind: "data" },
   png: { type: "image/png", kind: "image" },
   jpg: { type: "image/jpeg", kind: "image" },
   jpeg: { type: "image/jpeg", kind: "image" },
@@ -34,7 +57,8 @@ const FILE_TYPES: Record<string, { type: string; kind: FileKind }> = {
   mem: { type: "application/octet-stream", kind: "data" },
 };
 
-const SAFE_SEGMENT = /^[A-Za-z0-9 _.()@+-]+$/;
+const SAFE_SEGMENT = /^[\p{L}\p{M}\p{N} _.()@+\-[\],'&!~]+$/u;
+const SKIPPED_FOLDERS = new Set(["node_modules", "__macosx"]);
 
 export function extensionOf(path: string): string {
   const name = path.split("/").pop() ?? "";
@@ -61,6 +85,14 @@ export function validateGamePath(path: string, maxDepth: number): string | null 
   return null;
 }
 
+// Files that are never part of a playable build (repo metadata, editor folders, docs, source code).
+export function isGameAssetPath(path: string, maxDepth: number): boolean {
+  const normalized = path.normalize("NFC");
+  if (normalized.split("/").some((segment) => SKIPPED_FOLDERS.has(segment.toLowerCase()))) return false;
+  if (/(^|\/)(Thumbs\.db|desktop\.ini)$/i.test(normalized)) return false;
+  return validateGamePath(normalized, maxDepth) === null;
+}
+
 const startsWith = (data: Uint8Array, bytes: number[], offset = 0) =>
   data.length >= offset + bytes.length && bytes.every((byte, index) => data[offset + index] === byte);
 const ascii = (text: string) => Array.from(text, (char) => char.charCodeAt(0));
@@ -73,8 +105,7 @@ function isExecutable(data: Uint8Array): boolean {
     startsWith(data, [0xfe, 0xed, 0xfa, 0xcf]) ||
     startsWith(data, [0xce, 0xfa, 0xed, 0xfe]) ||
     startsWith(data, [0xcf, 0xfa, 0xed, 0xfe]) ||
-    startsWith(data, [0xca, 0xfe, 0xba, 0xbe]) ||
-    startsWith(data, ascii("#!"))
+    startsWith(data, [0xca, 0xfe, 0xba, 0xbe])
   );
 }
 
@@ -107,28 +138,9 @@ const SIGNATURES: Record<string, (data: Uint8Array) => boolean> = {
   wasm: (d) => startsWith(d, [0x00, 0x61, 0x73, 0x6d]),
 };
 
-function isUtf8Text(data: Uint8Array): boolean {
-  if (data.includes(0)) return false;
-  try {
-    new TextDecoder("utf-8", { fatal: true }).decode(data);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export function validateFileContent(path: string, data: Uint8Array): string | null {
-  const extension = extensionOf(path);
-  const rule = FILE_TYPES[extension];
-  if (!rule) return "this file type is not supported.";
-  if (isExecutable(data)) return "executable content is not allowed.";
-  if (isArchive(data)) return "nested archives are not allowed.";
-  if (rule.kind === "text") {
-    return isUtf8Text(data) ? null : "the content does not match a UTF-8 text file.";
-  }
-  const signature = SIGNATURES[extension];
-  if (signature && !signature(data)) return `the content does not match a real .${extension} file.`;
-  return null;
+// Files are served with their extension's type, nosniff and a sandbox CSP, so only reject what is never game content.
+export function isAllowedContent(data: Uint8Array): boolean {
+  return !isExecutable(data) && !isArchive(data);
 }
 
 const COVER_EXTENSIONS: [string, string, keyof typeof SIGNATURES][] = [
